@@ -4,8 +4,10 @@ module registers (
     input  wire        clk,
     input  wire        rst_n,
 
-    // Common Data Input
+    // Common Data Inputs
     input  wire [7:0]  din,
+    input  wire [15:0] pc_din16,
+    input  wire        load_pc16,
 
     // Register Load & Counter Controls
     input  wire        load_a,
@@ -35,16 +37,13 @@ module registers (
     input  wire        set_i, clr_i,
     input  wire        set_d, clr_d,
     input  wire        clr_v,
-    input  wire        load_bit_flags, // Specialized latch for BIT instruction
+    input  wire        load_bit_flags,
 
     // ALU Flag Inputs
     input  wire        alu_n,
     input  wire        alu_z,
     input  wire        alu_c,
     input  wire        alu_v,
-
-    // B-Flag Value for stack push
-    input  wire        b_flag_val,
 
     // Register Outputs
     output reg  [7:0]  a,
@@ -72,11 +71,15 @@ module registers (
     assign flag_z = z_reg;
     assign flag_c = c_reg;
 
-    assign p_pushed = {n_reg, v_reg, 1'b1, b_flag_val, d_reg, i_reg, z_reg, c_reg};
+    // NMOS 6502 stack frame: Bit 5 is always 1, Bit 4 is 1 when pushed by PHP or BRK
+    assign p_pushed = {n_reg, v_reg, 1'b1, 1'b1, d_reg, i_reg, z_reg, c_reg};
 
-    // -------------------------------------------------------------------------
-    // Accumulator, X, Y, and SP
-    // -------------------------------------------------------------------------
+    wire [7:0] x_inc = x + 8'd1;
+    wire [7:0] x_dec = x - 8'd1;
+    wire [7:0] y_inc = y + 8'd1;
+    wire [7:0] y_dec = y - 8'd1;
+
+    // Accumulator, X, Y, and Stack Pointer
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             a  <= 8'h00;
@@ -87,12 +90,12 @@ module registers (
             if (load_a) a <= din;
 
             if (load_x)      x <= din;
-            else if (inc_x)  x <= x + 1'b1;
-            else if (dec_x)  x <= x - 1'b1;
+            else if (inc_x)  x <= x_inc;
+            else if (dec_x)  x <= x_dec;
 
             if (load_y)      y <= din;
-            else if (inc_y)  y <= y + 1'b1;
-            else if (dec_y)  y <= y - 1'b1;
+            else if (inc_y)  y <= y_inc;
+            else if (dec_y)  y <= y_dec;
 
             if (load_sp)     sp <= din;
             else if (inc_sp) sp <= sp + 1'b1;
@@ -100,14 +103,14 @@ module registers (
         end
     end
 
-    // -------------------------------------------------------------------------
     // Program Counter
-    // -------------------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             pc <= 16'h0000;
         end else begin
-            if (load_pcl) begin
+            if (load_pc16) begin
+                pc <= pc_din16;
+            end else if (load_pcl) begin
                 pc[7:0] <= din;
             end else if (load_pch) begin
                 pc[15:8] <= din;
@@ -119,9 +122,7 @@ module registers (
         end
     end
 
-    // -------------------------------------------------------------------------
     // Status Register (P) Logic
-    // -------------------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             n_reg <= 1'b0;
@@ -138,43 +139,37 @@ module registers (
             z_reg <= din[1];
             c_reg <= din[0];
         end else if (load_bit_flags) begin
-            // BIT instruction: N=mem[7], V=mem[6], Z=(A & mem == 0)
             n_reg <= din[7];
             v_reg <= din[6];
             z_reg <= ((a & din) == 8'h00);
         end else begin
-            // N and Z update rules
             if (update_nz) begin
                 n_reg <= alu_n;
                 z_reg <= alu_z;
             end else if (inc_x) begin
-                n_reg <= (x + 1'b1) >= 8'h80;
-                z_reg <= (x + 1'b1) == 8'h00;
+                n_reg <= x_inc[7];
+                z_reg <= (x_inc == 8'h00);
             end else if (dec_x) begin
-                n_reg <= (x - 1'b1) >= 8'h80;
-                z_reg <= (x - 1'b1) == 8'h00;
+                n_reg <= x_dec[7];
+                z_reg <= (x_dec == 8'h00);
             end else if (inc_y) begin
-                n_reg <= (y + 1'b1) >= 8'h80;
-                z_reg <= (y + 1'b1) == 8'h00;
+                n_reg <= y_inc[7];
+                z_reg <= (y_inc == 8'h00);
             end else if (dec_y) begin
-                n_reg <= (y - 1'b1) >= 8'h80;
-                z_reg <= (y - 1'b1) == 8'h00;
+                n_reg <= y_dec[7];
+                z_reg <= (y_dec == 8'h00);
             end
 
-            // Carry Flag (C)
             if (set_c)         c_reg <= 1'b1;
             else if (clr_c)    c_reg <= 1'b0;
             else if (update_c) c_reg <= alu_c;
 
-            // Overflow Flag (V)
             if (clr_v)         v_reg <= 1'b0;
             else if (update_v) v_reg <= alu_v;
 
-            // Interrupt Flag (I)
             if (set_i)         i_reg <= 1'b1;
             else if (clr_i)    i_reg <= 1'b0;
 
-            // Decimal Flag (D)
             if (set_d)         d_reg <= 1'b1;
             else if (clr_d)    d_reg <= 1'b0;
         end

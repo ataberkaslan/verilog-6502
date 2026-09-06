@@ -9,8 +9,8 @@ module alu (
     output reg  [7:0] out,
     output reg        cout,
     output reg        overflow,
-    output wire       zero,
-    output wire       negative
+    output reg        zero,
+    output reg        negative
 );
 
     localparam OP_ORA  = 4'd0;
@@ -27,93 +27,149 @@ module alu (
     localparam OP_DEC  = 4'd11;
     localparam OP_INC  = 4'd12;
 
-    wire [7:0] b_inv = ~b;
+    wire [7:0] b_inv   = ~b;
+    wire       cmp_cin = (op == OP_CMP) ? 1'b1 : cin;
 
+    // Standard Binary Addition & Subtraction
     wire [8:0] sum_bin  = a + b + cin;
-    wire [8:0] diff_bin = a + b_inv + cin;
+    wire [8:0] diff_bin = a + b_inv + cmp_cin;
 
     wire adc_v = (a[7] == b[7]) && (sum_bin[7] != a[7]);
     wire sbc_v = (a[7] != b[7]) && (diff_bin[7] != a[7]);
 
-    // NMOS Decimal Mode
-    wire [4:0] adc_lo = a[3:0] + b[3:0] + cin;
-    wire       adc_lo_adj = (adc_lo > 4'd9);
-    wire [3:0] adc_lo_nib = adc_lo_adj ? (adc_lo[3:0] + 4'd6) : adc_lo[3:0];
+    // -------------------------------------------------------------------------
+    // Bruce Clark NMOS 6502 Decimal ADC
+    // -------------------------------------------------------------------------
+    wire [4:0] da_al      = a[3:0] + b[3:0] + cin;
+    wire       da_al_adj  = (da_al >= 5'd10);
+    wire [7:0] da_al_corr = da_al_adj ? {4'd1, (da_al[3:0] + 4'd6)} : {3'd0, da_al};
+    wire [8:0] da_a1      = {1'b0, a[7:4], 4'd0} + {1'b0, b[7:4], 4'd0} + {1'b0, da_al_corr};
+    wire       da_cout    = (da_a1 >= 9'd160); // 0xA0
+    wire [8:0] da_sum     = da_cout ? (da_a1 + 9'd96) : da_a1; // 0x60
 
-    wire [4:0] adc_hi = a[7:4] + b[7:4] + (adc_lo_adj ? 1'b1 : adc_lo[4]);
-    wire       adc_hi_adj = (adc_hi > 4'd9);
-    wire [3:0] adc_hi_nib = adc_hi_adj ? (adc_hi[3:0] + 4'd6) : adc_hi[3:0];
-
-    wire [4:0] sbc_lo = a[3:0] - b[3:0] - (~cin);
-    wire       sbc_lo_adj = sbc_lo[4];
-    wire [3:0] sbc_lo_nib = sbc_lo_adj ? (sbc_lo[3:0] - 4'd6) : sbc_lo[3:0];
-
-    wire [4:0] sbc_hi = a[7:4] - b[7:4] - (sbc_lo_adj ? 1'b1 : 1'b0);
-    wire       sbc_hi_adj = sbc_hi[4];
-    wire [3:0] sbc_hi_nib = sbc_hi_adj ? (sbc_hi[3:0] - 4'd6) : sbc_hi[3:0];
+    // -------------------------------------------------------------------------
+    // Bruce Clark NMOS 6502 Decimal SBC
+    // -------------------------------------------------------------------------
+    wire signed [5:0] ds_al      = {2'b00, a[3:0]} - {2'b00, b[3:0]} - {5'd0, ~cin};
+    wire              ds_al_bor  = ds_al[5];
+    wire signed [9:0] ds_al_corr = ds_al_bor ? ({{6{1'b1}}, (ds_al[3:0] - 4'd6)} - 10'sd16) : {{4{ds_al[5]}}, ds_al};
+    wire signed [9:0] ds_a1      = {2'b00, a[7:4], 4'd0} - {2'b00, b[7:4], 4'd0} + ds_al_corr;
+    wire signed [9:0] ds_diff    = (ds_a1 < 0) ? (ds_a1 - 10'sd96) : ds_a1;
 
     always @(*) begin
         out      = 8'h00;
         cout     = cin;
         overflow = 1'b0;
+        negative = 1'b0;
+        zero     = 1'b0;
 
         case (op)
-            OP_ORA:  out = a | b;
-            OP_AND:  out = a & b;
-            OP_EOR:  out = a ^ b;
+            OP_ORA: begin
+                out      = a | b;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
+
+            OP_AND: begin
+                out      = a & b;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
+
+            OP_EOR: begin
+                out      = a ^ b;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
 
             OP_ADC: begin
-                overflow = adc_v;
                 if (decimal) begin
-                    out  = {adc_hi_nib, adc_lo_nib};
-                    cout = adc_hi_adj;
+                    out      = da_sum[7:0];
+                    cout     = da_cout;
+                    overflow = (a[7] ^ da_a1[7]) & ~(a[7] ^ b[7]);
+                    negative = da_a1[7];
+                    zero     = (sum_bin[7:0] == 8'h00);
                 end else begin
-                    out  = sum_bin[7:0];
-                    cout = sum_bin[8];
+                    out      = sum_bin[7:0];
+                    cout     = sum_bin[8];
+                    overflow = adc_v;
+                    negative = sum_bin[7];
+                    zero     = (sum_bin[7:0] == 8'h00);
                 end
             end
 
-            OP_SBC, OP_CMP: begin
+            OP_SBC: begin
+                if (decimal) begin
+                    out      = ds_diff[7:0];
+                    cout     = diff_bin[8];
+                    overflow = sbc_v;
+                    negative = diff_bin[7];
+                    zero     = (diff_bin[7:0] == 8'h00);
+                end else begin
+                    out      = diff_bin[7:0];
+                    cout     = diff_bin[8];
+                    overflow = sbc_v;
+                    negative = diff_bin[7];
+                    zero     = (diff_bin[7:0] == 8'h00);
+                end
+            end
+
+            OP_CMP: begin
+                out      = diff_bin[7:0];
+                cout     = diff_bin[8];
                 overflow = sbc_v;
-                if (decimal && (op == OP_SBC)) begin
-                    out  = {sbc_hi_nib, sbc_lo_nib};
-                    cout = ~sbc_hi_adj;
-                end else begin
-                    out  = diff_bin[7:0];
-                    cout = diff_bin[8];
-                end
+                negative = diff_bin[7];
+                zero     = (diff_bin[7:0] == 8'h00);
             end
 
-            // Unary shifts, rotates, increments, and decrements operate on b
             OP_ASL: begin
-                out  = {b[6:0], 1'b0};
-                cout = b[7];
+                out      = {b[6:0], 1'b0};
+                cout     = b[7];
+                negative = out[7];
+                zero     = (out == 8'h00);
             end
 
             OP_LSR: begin
-                out  = {1'b0, b[7:1]};
-                cout = b[0];
+                out      = {1'b0, b[7:1]};
+                cout     = b[0];
+                negative = out[7];
+                zero     = (out == 8'h00);
             end
 
             OP_ROL: begin
-                out  = {b[6:0], cin};
-                cout = b[7];
+                out      = {b[6:0], cin};
+                cout     = b[7];
+                negative = out[7];
+                zero     = (out == 8'h00);
             end
 
             OP_ROR: begin
-                out  = {cin, b[7:1]};
-                cout = b[0];
+                out      = {cin, b[7:1]};
+                cout     = b[0];
+                negative = out[7];
+                zero     = (out == 8'h00);
             end
 
-            OP_PASS: out = b;
-            OP_DEC:  out = b - 1'b1;
-            OP_INC:  out = b + 1'b1;
+            OP_PASS: begin
+                out      = b;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
+
+            OP_DEC: begin
+                out      = b - 1'b1;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
+
+            OP_INC: begin
+                out      = b + 1'b1;
+                negative = out[7];
+                zero     = (out == 8'h00);
+            end
 
             default: ;
         endcase
     end
-
-    assign zero     = (out == 8'h00);
-    assign negative = out[7];
 
 endmodule

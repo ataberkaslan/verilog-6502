@@ -22,17 +22,19 @@ module cpu_6502 (
 
     wire        load_p, update_nz, update_c, update_v;
     wire        set_c, clr_c, set_i, clr_i, set_d, clr_d, clr_v, load_bit_flags;
-
+    wire [15:0] ctrl_pc_din16;
+    wire        ctrl_load_pc16;
     wire [3:0]  alu_op;
     wire [7:0]  alu_b_in;
     wire [7:0]  ctrl_reg_din;
+    wire [7:0]  alu_a_in;
     wire [7:0]  alu_out;
     wire        alu_cout, alu_overflow, alu_zero, alu_negative;
 
     wire [7:0]  reg_din = (load_pcl || load_pch) ? ctrl_reg_din : alu_out;
 
     alu u_alu (
-        .a        (reg_a),
+        .a        (alu_a_in),
         .b        (alu_b_in),
         .cin      (flag_c),
         .decimal  (flag_d),
@@ -48,6 +50,8 @@ module cpu_6502 (
         .clk            (clk),
         .rst_n          (rst_n),
         .din            (reg_din),
+        .pc_din16       (ctrl_pc_din16),
+        .load_pc16      (ctrl_load_pc16),
         .load_a         (load_a),
         .load_x         (load_x),
         .load_y         (load_y),
@@ -79,7 +83,6 @@ module cpu_6502 (
         .alu_z          (alu_zero),
         .alu_c          (alu_cout),
         .alu_v          (alu_overflow),
-        .b_flag_val     (1'b1),
         .a              (reg_a),
         .x              (reg_x),
         .y              (reg_y),
@@ -96,7 +99,10 @@ module cpu_6502 (
 
     control u_control (
         .clk            (clk),
+        .alu_a_in       (alu_a_in),
         .rst_n          (rst_n),
+        .pc_din16       (ctrl_pc_din16),
+        .load_pc16      (ctrl_load_pc16),
         .din            (din),
         .addr           (addr),
         .we             (we),

@@ -1,3 +1,7 @@
 *.hex
 *.vvp
 *.vcd
+*.bin
+*.lst
+.fuse*
+obj_dir
