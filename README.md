@@ -67,3 +67,33 @@ To compile and run your own assembly programs (located in `main.asm`):
 ```bash
 make run
 ```
+
+---
+
+## Microsoft BASIC (MSBASIC) Support
+
+The processor is capable of running **Microsoft BASIC (MSBASIC)**, compiling directly into a self-booting 32KB ROM (`msbasic/tmp/sim.bin`) mapped from `$8000` to `$FFFF`.
+
+### Key Features
+*   **Local Toolchain Compilation**: Automatically clones and builds the `cc65` (ca65/ld65) toolchain from source inside the workspace.
+*   **Visual Interactive Backspacing**: Intercepts `Backspace` (ASCII 8) and `Delete` (ASCII 127) at the instruction level to output the visual deletion sequence `\b \b`, giving you a modern CLI experience.
+*   **Live Input Echoing**: Synchronizes and echoes keystrokes directly back to your terminal as you type them.
+*   **Hardware ROM Protection**: The Verilator simulation array protects memory writes to addresses $\ge \$8000$, allowing MSBASIC's auto-RAM scanner to find exactly `31743 BYTES FREE` without overwriting the ROM itself.
+
+### Run MSBASIC Interactively
+Simply run the following command to clean, rebuild, compile MSBASIC, and start the interactive terminal session:
+```bash
+make clean && make msbasic
+```
+
+Once loaded, follow these steps to reach the command prompt:
+1.  **`MEMORY SIZE?`** $\rightarrow$ Press **Enter**. (Default: 32KB RAM).
+2.  **`TERMINAL WIDTH?`** $\rightarrow$ Press **Enter**.
+3.  **Boot Success**:
+    ```text
+    31743 BYTES FREE
+    6502 BASIC VERSION 1.0
+
+    OK
+    ```
+Type standard BASIC programs (e.g. `10 FOR I = 1 TO 5`, `20 PRINT I`, `30 NEXT I`, `RUN`). Press **`Ctrl+C`** at any time to cleanly exit raw mode and return to your shell.

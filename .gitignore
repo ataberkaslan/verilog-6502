@@ -1,7 +1,11 @@
 *.hex
 *.vvp
 *.vcd
-*.bin
+main.bin
+6502_dormann.bin
 *.lst
 .fuse*
 obj_dir
+cc65/
+msbasic/
+

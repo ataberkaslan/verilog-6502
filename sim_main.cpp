@@ -6,9 +6,41 @@
 #include <string>
 #include <deque>
 #include <sstream>
+#include <unistd.h>
+#include <termios.h>
+#include <fcntl.h>
 #include "Vcpu_6502.h"
 #include "Vcpu_6502___024root.h"
 #include "verilated.h"
+
+// -----------------------------------------------------------------------------
+// Terminal Raw Mode Support
+// -----------------------------------------------------------------------------
+struct termios orig_termios;
+bool raw_mode_enabled = false;
+
+void disable_raw_mode() {
+    if (raw_mode_enabled) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        raw_mode_enabled = false;
+    }
+}
+
+void enable_raw_mode() {
+    if (isatty(STDIN_FILENO)) {
+        if (tcgetattr(STDIN_FILENO, &orig_termios) == 0) {
+            struct termios raw = orig_termios;
+            raw.c_lflag &= ~(ECHO | ICANON); // Disable echoing and line-buffered input
+            raw.c_iflag &= ~(IXON | ICRNL);  // Disable software flow control and carriage-return mapping
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+            raw_mode_enabled = true;
+            atexit(disable_raw_mode);
+        }
+    }
+    // Set stdin to non-blocking unconditionally (even if piped or not a tty)
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+}
 
 // -----------------------------------------------------------------------------
 // 6502 Disassembler Helper
@@ -301,19 +333,40 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> memory(65536, 0xEA);
 
     const char* bin_file = (argc > 1) ? argv[1] : "6502_dormann.bin";
-    std::ifstream file(bin_file, std::ios::binary);
+    std::ifstream file(bin_file, std::ios::binary | std::ios::ate);
     if (!file) {
         std::cerr << "Error: Could not open " << bin_file << "\n";
         delete top;
         return 1;
     }
 
-    file.read(reinterpret_cast<char*>(memory.data()), 65536);
-    std::cout << "Loaded " << file.gcount() << " bytes into memory from " << bin_file << "\n";
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
 
-    // Set Reset Vector to test suite entry ($0400)
-    memory[0xFFFC] = 0x00;
-    memory[0xFFFD] = 0x04;
+    if (size > 65536) size = 65536;
+    uint16_t load_offset = 65536 - size;
+
+    if (file.read(reinterpret_cast<char*>(memory.data() + load_offset), size)) {
+        std::cout << "Loaded " << size << " bytes into memory at offset $" 
+                  << std::hex << load_offset << " from " << bin_file << std::dec << "\n";
+    } else {
+        std::cerr << "Error reading file " << bin_file << "\n";
+        delete top;
+        return 1;
+    }
+
+    bool is_dormann = (std::string(bin_file).find("dormann") != std::string::npos);
+
+    // Set Reset Vector to test suite entry ($0400) only for Dormann test suite
+    if (is_dormann) {
+        memory[0xFFFC] = 0x00;
+        memory[0xFFFD] = 0x04;
+    }
+
+    // Enable Raw Mode for user programs to interact character-by-character
+    if (!is_dormann) {
+        enable_raw_mode();
+    }
 
     // Reset sequence
     top->clk   = 0;
@@ -339,6 +392,10 @@ int main(int argc, char** argv) {
     uint16_t min_addr_window = 0xFFFF;
     uint16_t max_addr_window = 0x0000;
     int      tight_loop_cycles = 0;
+
+    // Serial port emulation state
+    unsigned char rx_char = 0;
+    bool          rx_full = false;
 
     while (!Verilated::gotFinish()) {
         // --- Rising Edge ---
@@ -377,12 +434,36 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Periodically poll for keyboard input (only in interactive raw mode)
+        if (!is_dormann && (cycles % 1000 == 0)) {
+            if (!rx_full) {
+                unsigned char ch;
+                int r = read(STDIN_FILENO, &ch, 1);
+                if (r > 0) {
+                    rx_char = ch;
+                    rx_full = true;
+                }
+            }
+        }
+
         if (top->we) {
-            memory[top->addr] = top->dout;
+            if (top->addr == 0x5000) {
+                std::cout.put(top->dout);
+                std::cout.flush();
+            } else if (top->addr < 0x8000) { // ROM write protection: only RAM (< $8000) is writeable
+                memory[top->addr] = top->dout;
+            }
         }
 
         // Setup Read Data
-        top->din = memory[top->addr];
+        if (top->addr == 0x5001) {
+            top->din = rx_full ? 0x03 : 0x02; // Bit 1 = Tx Ready, Bit 0 = Rx Full
+        } else if (top->addr == 0x5000) {
+            top->din = rx_char;
+            rx_full = false; // Automatically clear Rx Full status on reading data
+        } else {
+            top->din = memory[top->addr];
+        }
         top->eval();
 
         // --- Falling Edge ---
@@ -399,8 +480,8 @@ int main(int argc, char** argv) {
         if (top->addr < min_addr_window) min_addr_window = top->addr;
         if (top->addr > max_addr_window) max_addr_window = top->addr;
 
-        // Loop Detector: Detect when addresses stay bounded within a <= 8-byte range
-        if (cycles % 128 == 0) {
+        // Loop Detector: Detect when addresses stay bounded within a <= 8-byte range (only for Dormann automated tests)
+        if (is_dormann && (cycles % 128 == 0)) {
             if ((max_addr_window - min_addr_window) <= 8 && min_addr_window != 0x0000) {
                 tight_loop_cycles += 128;
                 if (tight_loop_cycles >= 2048) { // Trapped in tight loop for >2000 cycles
@@ -414,33 +495,36 @@ int main(int argc, char** argv) {
             max_addr_window = 0x0000;
         }
 
-        // Direct JMP self trap detector
-        if (top->addr == candidate_trap) {
-            candidate_hits++;
-            if (candidate_hits > 200) {
-                print_diagnostics(top, memory, candidate_trap, cycles, trace, instruction_trace);
-                break;
+        // Direct JMP self trap detector (only for Dormann automated tests)
+        if (is_dormann) {
+            if (top->addr == candidate_trap) {
+                candidate_hits++;
+                if (candidate_hits > 200) {
+                    print_diagnostics(top, memory, candidate_trap, cycles, trace, instruction_trace);
+                    break;
+                }
+            } else {
+                candidate_trap = top->addr;
+                candidate_hits = 1;
             }
-        } else {
-            candidate_trap = top->addr;
-            candidate_hits = 1;
         }
 
-        // Periodic Status Heartbeat
-        if (cycles % 5000000 == 0) {
+        // Periodic Status Heartbeat (only for Dormann automated tests)
+        if (is_dormann && (cycles % 5000000 == 0)) {
             std::cout << "[" << std::setw(9) << cycles << " cycles] Currently at addr: $"
                       << std::hex << std::setw(4) << std::setfill('0') << top->addr
                       << " (Test case: $" << (int)memory[0x0200] << ")" << std::dec << "\n";
         }
 
-        // Safety timeout
-        if (cycles > 100000000) {
+        // Safety timeout (only for Dormann automated tests)
+        if (is_dormann && (cycles > 100000000)) {
             std::cout << "\n[WATCHDOG TIMEOUT TRIGGERED]\n";
             print_diagnostics(top, memory, top->addr, cycles, trace, instruction_trace);
             break;
         }
     }
 
+    disable_raw_mode();
     delete top;
     return 0;
 }

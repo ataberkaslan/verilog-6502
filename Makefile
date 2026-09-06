@@ -93,9 +93,50 @@ wave: $(IVERILOG_BIN) $(ASM_SRC:.asm=.hex)
 	$(GTKWAVE) cpu_6502.vcd
 
 # ------------------------------------------------------------------------------
-# 4. Cleanup
+# 4. Microsoft BASIC Targets
+# ------------------------------------------------------------------------------
+
+# Paths to the relocated msbasic and cc65 directories (moved up one directory)
+MSBASIC_DIR  := ../msbasic
+MSBASIC_BIN  := msbasic.bin
+
+# Define assembler and linker paths (prefer global system-wide binaries, fallback to ../cc65 path)
+CA65         ?= $(shell which ca65 2>/dev/null || echo ../cc65/bin/ca65)
+LD65         ?= $(shell which ld65 2>/dev/null || echo ../cc65/bin/ld65)
+
+# If we are using the fallback parent ca65, make sure it is built
+ifeq ($(CA65),../cc65/bin/ca65)
+CC65_DEP     := ../cc65/bin/ca65
+else
+CC65_DEP     :=
+endif
+
+# Build local cc65 toolchain if fallback is used and not already built
+../cc65/bin/ca65:
+	@echo "Building local cc65 toolchain inside ../cc65..."
+	$(MAKE) -j$$(nproc) -C ../cc65
+
+# Compile custom MSBASIC ROM binary
+$(MSBASIC_BIN): $(CC65_DEP)
+	@echo "Assembling and linking MSBASIC ROM..."
+	mkdir -p $(MSBASIC_DIR)/tmp
+	$(CA65) -D sim $(MSBASIC_DIR)/msbasic.s -o $(MSBASIC_DIR)/tmp/sim.o
+	$(LD65) -C $(MSBASIC_DIR)/sim.cfg $(MSBASIC_DIR)/tmp/sim.o -o $@ -Ln $(MSBASIC_DIR)/tmp/sim.lbl
+
+# Compile MSBASIC ROM target
+.PHONY: msbasic-build
+msbasic-build: $(MSBASIC_BIN)
+
+# Run interactive MSBASIC on Verilator simulator
+.PHONY: msbasic
+msbasic: $(VERILATED_BIN) $(MSBASIC_BIN)
+	./$(VERILATED_BIN) $(MSBASIC_BIN)
+
+# ------------------------------------------------------------------------------
+# 5. Cleanup
 # ------------------------------------------------------------------------------
 
 .PHONY: clean
 clean:
 	rm -rf $(OBJ_DIR) $(IVERILOG_BIN) $(USER_BIN) *.vcd *.hex temp.bin
+	rm -rf $(MSBASIC_DIR)/tmp
