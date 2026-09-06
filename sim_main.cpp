@@ -7,6 +7,7 @@
 #include <deque>
 #include <sstream>
 #include "Vcpu_6502.h"
+#include "Vcpu_6502___024root.h"
 #include "verilated.h"
 
 // -----------------------------------------------------------------------------
@@ -15,6 +16,17 @@
 struct DecodedInst {
     std::string text;
     int len;
+};
+
+struct TraceEntry {
+    uint16_t pc;
+    uint8_t opcode;
+    uint8_t a;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sp;
+    uint8_t p;
+    uint64_t cycle;
 };
 
 DecodedInst disassemble_6502(const std::vector<uint8_t>& mem, uint16_t pc) {
@@ -104,6 +116,26 @@ DecodedInst disassemble_6502(const std::vector<uint8_t>& mem, uint16_t pc) {
         case 0xE4: oss << "CPX $" << std::setw(2) << (int)b1; return {oss.str(), 2};
         case 0xE5: oss << "SBC $" << std::setw(2) << (int)b1; return {oss.str(), 2};
 
+        // Zero Page Indexed (2 bytes)
+        case 0x15: oss << "ORA $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x35: oss << "AND $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x55: oss << "EOR $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x75: oss << "ADC $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x95: oss << "STA $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xB5: oss << "LDA $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xD5: oss << "CMP $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xF5: oss << "SBC $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x16: oss << "ASL $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x36: oss << "ROL $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x56: oss << "LSR $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x76: oss << "ROR $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xD6: oss << "DEC $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xF6: oss << "INC $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xB4: oss << "LDY $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0x94: oss << "STY $" << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 2};
+        case 0xB6: oss << "LDX $" << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 2};
+        case 0x96: oss << "STX $" << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 2};
+
         // Absolute (3 bytes)
         case 0x20: oss << "JSR $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1; return {oss.str(), 3};
         case 0x4C: oss << "JMP $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1; return {oss.str(), 3};
@@ -114,6 +146,33 @@ DecodedInst disassemble_6502(const std::vector<uint8_t>& mem, uint16_t pc) {
         case 0xEC: oss << "CPX $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1; return {oss.str(), 3};
         case 0xCC: oss << "CPY $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1; return {oss.str(), 3};
 
+        // Absolute Indexed (3 bytes)
+        case 0x1D: oss << "ORA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x3D: oss << "AND $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x5D: oss << "EOR $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x7D: oss << "ADC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x9D: oss << "STA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xBD: oss << "LDA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xDD: oss << "CMP $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xFD: oss << "SBC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x1E: oss << "ASL $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x3E: oss << "ROL $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x5E: oss << "LSR $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0x7E: oss << "ROR $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xDE: oss << "DEC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xFE: oss << "INC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+        case 0xBC: oss << "LDY $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",X"; return {oss.str(), 3};
+
+        case 0x19: oss << "ORA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0x39: oss << "AND $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0x59: oss << "EOR $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0x79: oss << "ADC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0x99: oss << "STA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0xB9: oss << "LDA $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0xD9: oss << "CMP $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0xF9: oss << "SBC $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+        case 0xBE: oss << "LDX $" << std::setw(2) << (int)b2 << std::setw(2) << (int)b1 << ",Y"; return {oss.str(), 3};
+
         default:
             oss << ".byte $" << std::setw(2) << (int)op;
             return {oss.str(), 1};
@@ -123,8 +182,9 @@ DecodedInst disassemble_6502(const std::vector<uint8_t>& mem, uint16_t pc) {
 // -----------------------------------------------------------------------------
 // Diagnostic Dump Routine
 // -----------------------------------------------------------------------------
-void print_diagnostics(const std::vector<uint8_t>& memory, uint16_t trap_pc, uint64_t cycles,
-                       const std::deque<std::pair<uint16_t, uint8_t>>& trace) {
+void print_diagnostics(Vcpu_6502* top, const std::vector<uint8_t>& memory, uint16_t trap_pc, uint64_t cycles,
+                       const std::deque<std::pair<uint16_t, uint8_t>>& trace,
+                       const std::deque<TraceEntry>& inst_trace) {
     std::cout << "\n======================================================================\n";
     if (trap_pc == 0x3469) {
         std::cout << " >>> KLAUS DORMANN 6502 TEST PASSED! <<<\n";
@@ -139,13 +199,38 @@ void print_diagnostics(const std::vector<uint8_t>& memory, uint16_t trap_pc, uin
               << " (" << std::dec << trap_pc << ")\n";
     std::cout << " Total Cycles   : " << cycles << "\n";
 
-    // 1. Klaus Dormann Test Case Number at $0200
+    // 1. CPU Register State
+    if (top && top->rootp) {
+        uint8_t a = top->rootp->cpu_6502__DOT__reg_a;
+        uint8_t x = top->rootp->cpu_6502__DOT__reg_x;
+        uint8_t y = top->rootp->cpu_6502__DOT__reg_y;
+        uint8_t sp = top->rootp->cpu_6502__DOT__reg_sp;
+        uint16_t pc = top->rootp->cpu_6502__DOT__pc;
+        uint8_t p = top->rootp->cpu_6502__DOT__p_pushed;
+        std::cout << "\n[CPU INTERNAL REGISTERS]\n";
+        std::cout << " PC : $" << std::hex << std::setw(4) << std::setfill('0') << pc
+                  << "   SP : $" << std::setw(2) << (int)sp << "\n";
+        std::cout << " A  : $" << std::setw(2) << (int)a
+                  << "   X  : $" << std::setw(2) << (int)x
+                  << "   Y  : $" << std::setw(2) << (int)y << "\n";
+        std::cout << " P  : $" << std::setw(2) << (int)p << " ("
+                  << ((p & 0x80) ? 'N' : 'n')
+                  << ((p & 0x40) ? 'V' : 'v')
+                  << "11"
+                  << ((p & 0x08) ? 'D' : 'd')
+                  << ((p & 0x04) ? 'I' : 'i')
+                  << ((p & 0x02) ? 'Z' : 'z')
+                  << ((p & 0x01) ? 'C' : 'c')
+                  << ")\n";
+    }
+
+    // 2. Klaus Dormann Test Case Number at $0200
     uint8_t test_case = memory[0x0200];
     std::cout << "\n[DORMANN TEST STATE]\n";
     std::cout << " Active Test Case Number ($0200): $" << std::hex << std::setw(2) << (int)test_case
               << " (" << std::dec << (int)test_case << ")\n";
 
-    // 2. Zero Page Dump ($0000 - $001F)
+    // 3. Zero Page Dump ($0000 - $001F)
     std::cout << "\n[ZERO PAGE DUMP ($0000 - $001F)]\n";
     for (int row = 0; row < 2; ++row) {
         std::cout << " $" << std::hex << std::setw(4) << (row * 16) << ": ";
@@ -155,7 +240,31 @@ void print_diagnostics(const std::vector<uint8_t>& memory, uint16_t trap_pc, uin
         std::cout << "\n";
     }
 
-    // 3. Disassembly of Code Around Trap PC
+    // 4. Recent Instruction Trace
+    if (!inst_trace.empty()) {
+        std::cout << "\n[RECENT INSTRUCTION TRACE]\n";
+        for (const auto& entry : inst_trace) {
+            DecodedInst d = disassemble_6502(memory, entry.pc);
+            std::cout << "  Cycle: " << std::setw(8) << std::dec << entry.cycle
+                      << " | PC: $" << std::hex << std::setw(4) << std::setfill('0') << entry.pc
+                      << " | Op: " << std::setw(2) << (int)entry.opcode << " (" << std::setw(8) << std::left << d.text << ")"
+                      << std::right << " | A: $" << std::setw(2) << (int)entry.a
+                      << " X: $" << std::setw(2) << (int)entry.x
+                      << " Y: $" << std::setw(2) << (int)entry.y
+                      << " SP: $" << std::setw(2) << (int)entry.sp
+                      << " Flags: "
+                      << ((entry.p & 0x80) ? 'N' : 'n')
+                      << ((entry.p & 0x40) ? 'V' : 'v')
+                      << "--"
+                      << ((entry.p & 0x08) ? 'D' : 'd')
+                      << ((entry.p & 0x04) ? 'I' : 'i')
+                      << ((entry.p & 0x02) ? 'Z' : 'z')
+                      << ((entry.p & 0x01) ? 'C' : 'c')
+                      << "\n";
+        }
+    }
+
+    // 5. Disassembly of Code Around Trap PC
     std::cout << "\n[DISASSEMBLY AROUND TRAP ADDRESS]\n";
     uint16_t dis_pc = (trap_pc > 16) ? (trap_pc - 16) : 0x0000;
     while (dis_pc <= trap_pc + 16 && dis_pc < 0xFFFF) {
@@ -172,7 +281,7 @@ void print_diagnostics(const std::vector<uint8_t>& memory, uint16_t trap_pc, uin
         dis_pc += d.len;
     }
 
-    // 4. Last Executed Bus Transactions
+    // 6. Last Executed Bus Transactions
     std::cout << "\n[RECENT BUS ACTIVITY (LAST " << trace.size() << " TRANSACTIONS)]\n";
     for (size_t i = 0; i < trace.size(); ++i) {
         std::cout << "  [-" << std::dec << (trace.size() - i) << "] Addr: $"
@@ -222,6 +331,7 @@ int main(int argc, char** argv) {
 
     uint64_t cycles = 0;
     std::deque<std::pair<uint16_t, uint8_t>> trace;
+    std::deque<TraceEntry> instruction_trace;
 
     // Loop detection state
     uint16_t candidate_trap = 0;
@@ -234,6 +344,38 @@ int main(int argc, char** argv) {
         // --- Rising Edge ---
         top->clk = 1;
         top->eval();
+
+        if (top->rootp->cpu_6502__DOT__u_control__DOT__step == 1) {
+            uint16_t current_pc = (top->rootp->cpu_6502__DOT__pc - 1) & 0xFFFF;
+            uint8_t current_opcode = top->rootp->cpu_6502__DOT__u_control__DOT__ir;
+            int dup_count = 0;
+            for (auto it = instruction_trace.rbegin(); it != instruction_trace.rend(); ++it) {
+                if (it->pc == current_pc) dup_count++;
+                else break;
+            }
+            int ff_count = 0;
+            if (current_opcode == 0xFF) {
+                for (auto it = instruction_trace.rbegin(); it != instruction_trace.rend(); ++it) {
+                    if (it->opcode == 0xFF) ff_count++;
+                    else break;
+                }
+            }
+            if (dup_count < 3 && ff_count < 3) {
+                TraceEntry entry;
+                entry.pc = current_pc;
+                entry.opcode = current_opcode;
+                entry.a = top->rootp->cpu_6502__DOT__reg_a;
+                entry.x = top->rootp->cpu_6502__DOT__reg_x;
+                entry.y = top->rootp->cpu_6502__DOT__reg_y;
+                entry.sp = top->rootp->cpu_6502__DOT__reg_sp;
+                entry.p = top->rootp->cpu_6502__DOT__p_pushed;
+                entry.cycle = cycles;
+                instruction_trace.push_back(entry);
+                if (instruction_trace.size() > 500) {
+                    instruction_trace.pop_front();
+                }
+            }
+        }
 
         if (top->we) {
             memory[top->addr] = top->dout;
@@ -262,7 +404,7 @@ int main(int argc, char** argv) {
             if ((max_addr_window - min_addr_window) <= 8 && min_addr_window != 0x0000) {
                 tight_loop_cycles += 128;
                 if (tight_loop_cycles >= 2048) { // Trapped in tight loop for >2000 cycles
-                    print_diagnostics(memory, min_addr_window, cycles, trace);
+                    print_diagnostics(top, memory, min_addr_window, cycles, trace, instruction_trace);
                     break;
                 }
             } else {
@@ -276,7 +418,7 @@ int main(int argc, char** argv) {
         if (top->addr == candidate_trap) {
             candidate_hits++;
             if (candidate_hits > 200) {
-                print_diagnostics(memory, candidate_trap, cycles, trace);
+                print_diagnostics(top, memory, candidate_trap, cycles, trace, instruction_trace);
                 break;
             }
         } else {
@@ -294,7 +436,7 @@ int main(int argc, char** argv) {
         // Safety timeout
         if (cycles > 100000000) {
             std::cout << "\n[WATCHDOG TIMEOUT TRIGGERED]\n";
-            print_diagnostics(memory, top->addr, cycles, trace);
+            print_diagnostics(top, memory, top->addr, cycles, trace, instruction_trace);
             break;
         }
     }

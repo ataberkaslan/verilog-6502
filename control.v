@@ -151,6 +151,14 @@ module control (
     localparam OP_ASL_ABS = 8'h0E; localparam OP_LSR_ABS = 8'h4E;
     localparam OP_ROL_ABS = 8'h2E; localparam OP_ROR_ABS = 8'h6E;
 
+    // Missing indexed read-modify-write opcodes
+    localparam OP_ASL_ZPX = 8'h16; localparam OP_ASL_ABX = 8'h1E;
+    localparam OP_ROL_ZPX = 8'h36; localparam OP_ROL_ABX = 8'h3E;
+    localparam OP_LSR_ZPX = 8'h56; localparam OP_LSR_ABX = 8'h5E;
+    localparam OP_ROR_ZPX = 8'h76; localparam OP_ROR_ABX = 8'h7E;
+    localparam OP_DEC_ZPX = 8'hD6; localparam OP_DEC_ABX = 8'hDE;
+    localparam OP_INC_ZPX = 8'hF6; localparam OP_INC_ABX = 8'hFE;
+
     // Registers & Sequencer
     reg [7:0] ir;
     reg [2:0] step;
@@ -178,20 +186,20 @@ module control (
     reg [3:0] rmw_alu_op;
     always @(*) begin
         case (ir)
-            OP_INC_ZP, OP_INC_ABS:           rmw_alu_op = ALU_INC;
-            OP_DEC_ZP, OP_DEC_ABS:           rmw_alu_op = ALU_DEC;
-            OP_ASL_ZP, OP_ASL_ABS, OP_ASL_A: rmw_alu_op = ALU_ASL;
-            OP_LSR_ZP, OP_LSR_ABS, OP_LSR_A: rmw_alu_op = ALU_LSR;
-            OP_ROL_ZP, OP_ROL_ABS, OP_ROL_A: rmw_alu_op = ALU_ROL;
-            OP_ROR_ZP, OP_ROR_ABS, OP_ROR_A: rmw_alu_op = ALU_ROR;
-            default:                         rmw_alu_op = ALU_PASS;
+            OP_INC_ZP, OP_INC_ABS, OP_INC_ZPX, OP_INC_ABX:           rmw_alu_op = ALU_INC;
+            OP_DEC_ZP, OP_DEC_ABS, OP_DEC_ZPX, OP_DEC_ABX:           rmw_alu_op = ALU_DEC;
+            OP_ASL_ZP, OP_ASL_ABS, OP_ASL_A, OP_ASL_ZPX, OP_ASL_ABX: rmw_alu_op = ALU_ASL;
+            OP_LSR_ZP, OP_LSR_ABS, OP_LSR_A, OP_LSR_ZPX, OP_LSR_ABX: rmw_alu_op = ALU_LSR;
+            OP_ROL_ZP, OP_ROL_ABS, OP_ROL_A, OP_ROL_ZPX, OP_ROL_ABX: rmw_alu_op = ALU_ROL;
+            OP_ROR_ZP, OP_ROR_ABS, OP_ROR_A, OP_ROR_ZPX, OP_ROR_ABX: rmw_alu_op = ALU_ROR;
+            default:                                                 rmw_alu_op = ALU_PASS;
         endcase
     end
 
-    wire is_shift_rot = (ir == OP_ASL_ZP || ir == OP_ASL_ABS || ir == OP_ASL_A ||
-                         ir == OP_LSR_ZP || ir == OP_LSR_ABS || ir == OP_LSR_A ||
-                         ir == OP_ROL_ZP || ir == OP_ROL_ABS || ir == OP_ROL_A ||
-                         ir == OP_ROR_ZP || ir == OP_ROR_ABS || ir == OP_ROR_A);
+    wire is_shift_rot = (ir == OP_ASL_ZP || ir == OP_ASL_ABS || ir == OP_ASL_A || ir == OP_ASL_ZPX || ir == OP_ASL_ABX ||
+                         ir == OP_LSR_ZP || ir == OP_LSR_ABS || ir == OP_LSR_A || ir == OP_LSR_ZPX || ir == OP_LSR_ABX ||
+                         ir == OP_ROL_ZP || ir == OP_ROL_ABS || ir == OP_ROL_A || ir == OP_ROL_ZPX || ir == OP_ROL_ABX ||
+                         ir == OP_ROR_ZP || ir == OP_ROR_ABS || ir == OP_ROR_A || ir == OP_ROR_ZPX || ir == OP_ROR_ABX);
 
     // Sequential Bus Capture & Step Advancement
     always @(posedge clk or negedge rst_n) begin
@@ -230,11 +238,16 @@ module control (
                     rmw_data  <= din;
                 end
                 3'd3: begin
-                    ptr_high <= din;
+                    if (ir == OP_JMP_IND) begin
+                        ptr_low <= din;
+                    end else begin
+                        ptr_high <= din;
+                    end
                     rmw_data <= din;
                 end
                 3'd4: begin
                     if (ir == OP_JSR) addr_high <= din;
+                    else if (ir == OP_JMP_IND) ptr_high <= din;
                 end
                 default: ;
             endcase
@@ -328,9 +341,11 @@ module control (
                             OP_INY: begin inc_y = 1'b1; end_of_instruction = 1'b1; end
                             OP_DEY: begin dec_y = 1'b1; end_of_instruction = 1'b1; end
 
+                            // Accumulator Shifts: reg_din receives alu_out
                             OP_ASL_A, OP_LSR_A, OP_ROL_A, OP_ROR_A: begin
                                 alu_op             = rmw_alu_op;
                                 alu_b_in           = a;
+                                reg_din            = alu_out;
                                 load_a             = 1'b1;
                                 update_nz          = 1'b1;
                                 update_c           = 1'b1;
@@ -340,11 +355,14 @@ module control (
                             OP_LDA_IMM: begin addr = pc; reg_din = din; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
                             OP_LDX_IMM: begin addr = pc; reg_din = din; load_x = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
                             OP_LDY_IMM: begin addr = pc; reg_din = din; load_y = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
-                            OP_ADC_IMM: begin addr = pc; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
-                            OP_SBC_IMM: begin addr = pc; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
-                            OP_AND_IMM: begin addr = pc; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
-                            OP_ORA_IMM: begin addr = pc; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
-                            OP_EOR_IMM: begin addr = pc; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+
+                            // Immediate ALU: reg_din receives alu_out
+                            OP_ADC_IMM: begin addr = pc; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+                            OP_SBC_IMM: begin addr = pc; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+                            OP_AND_IMM: begin addr = pc; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+                            OP_ORA_IMM: begin addr = pc; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+                            OP_EOR_IMM: begin addr = pc; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
+
                             OP_CMP_IMM: begin addr = pc; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
                             OP_CPX_IMM: begin addr = pc; alu_op = ALU_CMP; alu_a_in = x; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
                             OP_CPY_IMM: begin addr = pc; alu_op = ALU_CMP; alu_a_in = y; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; inc_pc = 1'b1; end_of_instruction = 1'b1; end
@@ -355,13 +373,15 @@ module control (
                             OP_INC_ZP, OP_DEC_ZP, OP_ASL_ZP, OP_LSR_ZP, OP_ROL_ZP, OP_ROR_ZP,
                             OP_LDA_ZPX, OP_STA_ZPX, OP_LDY_ZPX, OP_STY_ZPX, OP_LDX_ZPY, OP_STX_ZPY,
                             OP_ADC_ZPX, OP_SBC_ZPX, OP_AND_ZPX, OP_ORA_ZPX, OP_EOR_ZPX, OP_CMP_ZPX,
+                            OP_INC_ZPX, OP_DEC_ZPX, OP_ASL_ZPX, OP_LSR_ZPX, OP_ROL_ZPX, OP_ROR_ZPX,
                             OP_LDA_INDY, OP_STA_INDY, OP_ADC_INDY, OP_SBC_INDY, OP_AND_INDY, OP_ORA_INDY, OP_EOR_INDY, OP_CMP_INDY,
                             OP_LDA_INDX, OP_STA_INDX, OP_ADC_INDX, OP_SBC_INDX, OP_AND_INDX, OP_ORA_INDX, OP_EOR_INDX, OP_CMP_INDX,
                             OP_JMP, OP_JMP_IND, OP_LDA_ABS, OP_STA_ABS, OP_LDX_ABS, OP_STX_ABS, OP_LDY_ABS, OP_STY_ABS,
                             OP_ADC_ABS, OP_SBC_ABS, OP_AND_ABS, OP_ORA_ABS, OP_EOR_ABS, OP_CMP_ABS, OP_CPX_ABS, OP_CPY_ABS, OP_BIT_ABS,
                             OP_LDA_ABX, OP_STA_ABX, OP_LDY_ABX, OP_ADC_ABX, OP_SBC_ABX, OP_AND_ABX, OP_ORA_ABX, OP_EOR_ABX, OP_CMP_ABX,
                             OP_LDA_ABY, OP_STA_ABY, OP_LDX_ABY, OP_ADC_ABY, OP_SBC_ABY, OP_AND_ABY, OP_ORA_ABY, OP_EOR_ABY, OP_CMP_ABY,
-                            OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS: begin
+                            OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS,
+                            OP_INC_ABX, OP_DEC_ABX, OP_ASL_ABX, OP_LSR_ABX, OP_ROL_ABX, OP_ROR_ABX: begin
                                 addr   = pc;
                                 inc_pc = 1'b1;
                             end
@@ -384,11 +404,14 @@ module control (
                         OP_LDA_ZP: begin addr = {8'h00, addr_low}; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_LDX_ZP: begin addr = {8'h00, addr_low}; reg_din = din; load_x = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_LDY_ZP: begin addr = {8'h00, addr_low}; reg_din = din; load_y = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ADC_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        // Zero Page ALU: reg_din receives alu_out
+                        OP_ADC_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
                         OP_CMP_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
                         OP_CPX_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_CMP; alu_a_in = x; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
                         OP_CPY_ZP: begin addr = {8'h00, addr_low}; alu_op = ALU_CMP; alu_a_in = y; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
@@ -401,18 +424,23 @@ module control (
                         OP_INC_ZP, OP_DEC_ZP, OP_ASL_ZP, OP_LSR_ZP, OP_ROL_ZP, OP_ROR_ZP: begin
                             addr = {8'h00, addr_low};
                         end
+                        OP_INC_ZPX, OP_DEC_ZPX, OP_ASL_ZPX, OP_LSR_ZPX, OP_ROL_ZPX, OP_ROR_ZPX: begin
+                            addr = {8'h00, addr_low + x};
+                        end
 
                         OP_LDA_ZPX: begin addr = {8'h00, addr_low + x}; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STA_ZPX: begin addr = {8'h00, addr_low + x}; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
                         OP_LDY_ZPX: begin addr = {8'h00, addr_low + x}; reg_din = din; load_y = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STY_ZPX: begin addr = {8'h00, addr_low + x}; we = 1'b1; dout = y; end_of_instruction = 1'b1; end
-                        OP_ADC_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_CMP_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
 
+                        // Zero Page Indexed ALU: reg_din receives alu_out
+                        OP_ADC_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        OP_CMP_ZPX: begin addr = {8'h00, addr_low + x}; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
                         OP_LDX_ZPY: begin addr = {8'h00, addr_low + y}; reg_din = din; load_x = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STX_ZPY: begin addr = {8'h00, addr_low + y}; we = 1'b1; dout = x; end_of_instruction = 1'b1; end
 
@@ -427,12 +455,12 @@ module control (
                         OP_ADC_ABS, OP_SBC_ABS, OP_AND_ABS, OP_ORA_ABS, OP_EOR_ABS, OP_CMP_ABS, OP_CPX_ABS, OP_CPY_ABS, OP_BIT_ABS,
                         OP_LDA_ABX, OP_STA_ABX, OP_LDY_ABX, OP_ADC_ABX, OP_SBC_ABX, OP_AND_ABX, OP_ORA_ABX, OP_EOR_ABX, OP_CMP_ABX,
                         OP_LDA_ABY, OP_STA_ABY, OP_LDX_ABY, OP_ADC_ABY, OP_SBC_ABY, OP_AND_ABY, OP_ORA_ABY, OP_EOR_ABY, OP_CMP_ABY,
-                        OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS: begin
+                        OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS,
+                        OP_INC_ABX, OP_DEC_ABX, OP_ASL_ABX, OP_LSR_ABX, OP_ROL_ABX, OP_ROR_ABX: begin
                             addr   = pc;
                             inc_pc = 1'b1;
                         end
 
-                        // Stack Pulls (Execute directly in T2 while addressing the stack)
                         OP_PLA: begin
                             addr               = 16'h0100 | sp;
                             reg_din            = din;
@@ -450,7 +478,6 @@ module control (
                             end_of_instruction = 1'b1;
                         end
 
-                        // RTS: Latch PCL, advance SP to point to PCH
                         OP_RTS: begin
                             addr     = 16'h0100 | sp;
                             reg_din  = din;
@@ -458,7 +485,6 @@ module control (
                             inc_sp   = 1'b1;
                         end
 
-                        // RTI: Latch P, advance SP to point to PCL
                         OP_RTI: begin
                             addr     = 16'h0100 | sp;
                             reg_din  = din;
@@ -466,7 +492,6 @@ module control (
                             inc_sp   = 1'b1;
                         end
 
-                        // JSR & BRK: Push PCH to stack
                         OP_JSR, OP_BRK: begin
                             addr   = 16'h0100 | sp;
                             dout   = pc[15:8];
@@ -479,7 +504,7 @@ module control (
                 end
 
                 // -------------------------------------------------------------
-                // T3: Absolute Exec / Subroutine Push PCL / Latch PCH
+                // T3: Absolute Exec / Stack Writes / Subroutine Push PCL
                 // -------------------------------------------------------------
                 3'd3: begin
                     case (ir)
@@ -499,11 +524,14 @@ module control (
                         OP_STA_ABS: begin addr = {addr_high, addr_low}; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
                         OP_STX_ABS: begin addr = {addr_high, addr_low}; we = 1'b1; dout = x; end_of_instruction = 1'b1; end
                         OP_STY_ABS: begin addr = {addr_high, addr_low}; we = 1'b1; dout = y; end_of_instruction = 1'b1; end
-                        OP_ADC_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        // Absolute ALU: reg_din receives alu_out
+                        OP_ADC_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
                         OP_CMP_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
                         OP_CPX_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_CMP; alu_a_in = x; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
                         OP_CPY_ABS: begin addr = {addr_high, addr_low}; alu_op = ALU_CMP; alu_a_in = y; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
@@ -512,29 +540,42 @@ module control (
                         OP_LDA_ABX: begin addr = {addr_high, addr_low} + x; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STA_ABX: begin addr = {addr_high, addr_low} + x; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
                         OP_LDY_ABX: begin addr = {addr_high, addr_low} + x; reg_din = din; load_y = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ADC_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        // Absolute Indexed ALU: reg_din receives alu_out
+                        OP_ADC_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
                         OP_CMP_ABX: begin addr = {addr_high, addr_low} + x; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
 
                         OP_LDA_ABY: begin addr = {addr_high, addr_low} + y; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STA_ABY: begin addr = {addr_high, addr_low} + y; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
                         OP_LDX_ABY: begin addr = {addr_high, addr_low} + y; reg_din = din; load_x = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ADC_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        OP_ADC_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
                         OP_CMP_ABY: begin addr = {addr_high, addr_low} + y; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
 
                         OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS: begin
                             addr = {addr_high, addr_low};
                         end
+                        OP_INC_ABX, OP_DEC_ABX, OP_ASL_ABX, OP_LSR_ABX, OP_ROL_ABX, OP_ROR_ABX: begin
+                            addr = {addr_high, addr_low} + x;
+                        end
 
                         OP_INC_ZP, OP_DEC_ZP, OP_ASL_ZP, OP_LSR_ZP, OP_ROL_ZP, OP_ROR_ZP: begin
                             addr = {8'h00, addr_low};
+                            we   = 1'b1;
+                            dout = rmw_data;
+                        end
+                        OP_INC_ZPX, OP_DEC_ZPX, OP_ASL_ZPX, OP_LSR_ZPX, OP_ROL_ZPX, OP_ROR_ZPX: begin
+                            addr = {8'h00, addr_low + x};
                             we   = 1'b1;
                             dout = rmw_data;
                         end
@@ -588,47 +629,60 @@ module control (
                             if (is_shift_rot) update_c = 1'b1;
                             end_of_instruction = 1'b1;
                         end
+                        OP_INC_ZPX, OP_DEC_ZPX, OP_ASL_ZPX, OP_LSR_ZPX, OP_ROL_ZPX, OP_ROR_ZPX: begin
+                            addr               = {8'h00, addr_low + x};
+                            we                 = 1'b1;
+                            dout               = alu_out;
+                            alu_op             = rmw_alu_op;
+                            alu_b_in           = rmw_data;
+                            update_nz          = 1'b1;
+                            if (is_shift_rot) update_c = 1'b1;
+                            end_of_instruction = 1'b1;
+                        end
 
                         OP_INC_ABS, OP_DEC_ABS, OP_ASL_ABS, OP_LSR_ABS, OP_ROL_ABS, OP_ROR_ABS: begin
                             addr = {addr_high, addr_low};
                             we   = 1'b1;
                             dout = rmw_data;
                         end
+                        OP_INC_ABX, OP_DEC_ABX, OP_ASL_ABX, OP_LSR_ABX, OP_ROL_ABX, OP_ROR_ABX: begin
+                            addr = {addr_high, addr_low} + x;
+                            we   = 1'b1;
+                            dout = rmw_data;
+                        end
 
                         OP_JMP_IND: begin
-                            reg_din  = din;
-                            load_pcl = 1'b1;
                             addr     = {addr_high, addr_low + 8'd1};
                         end
 
                         OP_LDA_INDY: begin addr = {ptr_high, ptr_low} + y; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STA_INDY: begin addr = {ptr_high, ptr_low} + y; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
-                        OP_ADC_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        // Indirect ALU: reg_din receives alu_out
+                        OP_ADC_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_CMP_INDY: begin addr = {ptr_high, ptr_low} + y; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
 
                         OP_LDA_INDX: begin addr = {ptr_high, ptr_low}; reg_din = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_STA_INDX: begin addr = {ptr_high, ptr_low}; we = 1'b1; dout = a; end_of_instruction = 1'b1; end
-                        OP_ADC_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_SBC_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
-                        OP_AND_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_ORA_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
-                        OP_EOR_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+
+                        OP_ADC_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_ADC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_SBC_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_SBC; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; update_c = 1'b1; update_v = 1'b1; end_of_instruction = 1'b1; end
+                        OP_AND_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_AND; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_ORA_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_ORA; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
+                        OP_EOR_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_EOR; alu_a_in = a; alu_b_in = din; reg_din = alu_out; load_a = 1'b1; update_nz = 1'b1; end_of_instruction = 1'b1; end
                         OP_CMP_INDX: begin addr = {ptr_high, ptr_low}; alu_op = ALU_CMP; alu_a_in = a; alu_b_in = din; update_nz = 1'b1; update_c = 1'b1; end_of_instruction = 1'b1; end
 
-                        // JSR: Fetch destination high byte
                         OP_JSR: addr = pc;
 
-                        // RTS: Increment return address by 1 (NMOS standard)
                         OP_RTS: begin
                             inc_pc             = 1'b1;
                             end_of_instruction = 1'b1;
                         end
 
-                        // RTI: Latch PCH directly from stack
                         OP_RTI: begin
                             addr               = 16'h0100 | sp;
                             reg_din            = din;
@@ -636,7 +690,6 @@ module control (
                             end_of_instruction = 1'b1;
                         end
 
-                        // BRK: Push P register to stack
                         OP_BRK: begin
                             addr   = 16'h0100 | sp;
                             dout   = p_pushed;
@@ -664,10 +717,20 @@ module control (
                             if (is_shift_rot) update_c = 1'b1;
                             end_of_instruction = 1'b1;
                         end
+                        OP_INC_ABX, OP_DEC_ABX, OP_ASL_ABX, OP_LSR_ABX, OP_ROL_ABX, OP_ROR_ABX: begin
+                            addr               = {addr_high, addr_low} + x;
+                            we                 = 1'b1;
+                            dout               = alu_out;
+                            alu_op             = rmw_alu_op;
+                            alu_b_in           = rmw_data;
+                            update_nz          = 1'b1;
+                            if (is_shift_rot) update_c = 1'b1;
+                            end_of_instruction = 1'b1;
+                        end
 
                         OP_JMP_IND: begin
-                            reg_din            = din;
-                            load_pch           = 1'b1;
+                            pc_din16           = {ptr_high, ptr_low};
+                            load_pc16          = 1'b1;
                             end_of_instruction = 1'b1;
                         end
 
@@ -677,7 +740,6 @@ module control (
                             end_of_instruction = 1'b1;
                         end
 
-                        // BRK: Read PCL from $FFFE
                         OP_BRK: begin
                             addr     = 16'hFFFE;
                             load_pcl = 1'b1;

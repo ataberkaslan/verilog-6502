@@ -30,7 +30,9 @@ module alu (
     wire [7:0] b_inv   = ~b;
     wire       cmp_cin = (op == OP_CMP) ? 1'b1 : cin;
 
-    // Standard Binary Addition & Subtraction
+    // -------------------------------------------------------------------------
+    // Binary Arithmetic & Flags
+    // -------------------------------------------------------------------------
     wire [8:0] sum_bin  = a + b + cin;
     wire [8:0] diff_bin = a + b_inv + cmp_cin;
 
@@ -38,23 +40,27 @@ module alu (
     wire sbc_v = (a[7] != b[7]) && (diff_bin[7] != a[7]);
 
     // -------------------------------------------------------------------------
-    // Bruce Clark NMOS 6502 Decimal ADC
+    // NMOS 6502 Decimal Mode Logic (Bruce Clark Specification)
     // -------------------------------------------------------------------------
-    wire [4:0] da_al      = a[3:0] + b[3:0] + cin;
-    wire       da_al_adj  = (da_al >= 5'd10);
-    wire [7:0] da_al_corr = da_al_adj ? {4'd1, (da_al[3:0] + 4'd6)} : {3'd0, da_al};
-    wire [8:0] da_a1      = {1'b0, a[7:4], 4'd0} + {1'b0, b[7:4], 4'd0} + {1'b0, da_al_corr};
-    wire       da_cout    = (da_a1 >= 9'd160); // 0xA0
-    wire [8:0] da_sum     = da_cout ? (da_a1 + 9'd96) : da_a1; // 0x60
+    // Decimal ADC
+    wire [4:0] adc_al     = a[3:0] + b[3:0] + cin;
+    wire       adc_al_adj = (adc_al > 4'd9);
+    wire [3:0] adc_al_dec = adc_al_adj ? (adc_al[3:0] + 4'd6) : adc_al[3:0];
 
-    // -------------------------------------------------------------------------
-    // Bruce Clark NMOS 6502 Decimal SBC
-    // -------------------------------------------------------------------------
-    wire signed [5:0] ds_al      = {2'b00, a[3:0]} - {2'b00, b[3:0]} - {5'd0, ~cin};
-    wire              ds_al_bor  = ds_al[5];
-    wire signed [9:0] ds_al_corr = ds_al_bor ? ({{6{1'b1}}, (ds_al[3:0] - 4'd6)} - 10'sd16) : {{4{ds_al[5]}}, ds_al};
-    wire signed [9:0] ds_a1      = {2'b00, a[7:4], 4'd0} - {2'b00, b[7:4], 4'd0} + ds_al_corr;
-    wire signed [9:0] ds_diff    = (ds_a1 < 0) ? (ds_a1 - 10'sd96) : ds_a1;
+    wire [4:0] adc_ah     = a[7:4] + b[7:4] + adc_al_adj;
+    wire       adc_ah_adj = (adc_ah > 4'd9);
+    wire [3:0] adc_ah_dec = adc_ah_adj ? (adc_ah[3:0] + 4'd6) : adc_ah[3:0];
+
+    // Decimal SBC
+    // Low nibble subtraction with borrow detection on bit 4
+    wire [4:0] sbc_al     = a[3:0] - b[3:0] - (!cin);
+    wire       sbc_al_bor = sbc_al[4];
+    wire [3:0] sbc_al_dec = sbc_al_bor ? (sbc_al[3:0] - 4'd6) : sbc_al[3:0];
+
+    // High nibble subtraction taking low nibble borrow
+    wire [4:0] sbc_ah     = a[7:4] - b[7:4] - sbc_al_bor;
+    wire       sbc_ah_bor = sbc_ah[4];
+    wire [3:0] sbc_ah_dec = sbc_ah_bor ? (sbc_ah[3:0] - 4'd6) : sbc_ah[3:0];
 
     always @(*) begin
         out      = 8'h00;
@@ -84,10 +90,10 @@ module alu (
 
             OP_ADC: begin
                 if (decimal) begin
-                    out      = da_sum[7:0];
-                    cout     = da_cout;
-                    overflow = (a[7] ^ da_a1[7]) & ~(a[7] ^ b[7]);
-                    negative = da_a1[7];
+                    out      = {adc_ah_dec, adc_al_dec};
+                    cout     = adc_ah_adj;
+                    overflow = (a[7] == b[7]) && (a[7] != adc_ah[3]);
+                    negative = adc_ah[3];
                     zero     = (sum_bin[7:0] == 8'h00);
                 end else begin
                     out      = sum_bin[7:0];
@@ -100,8 +106,8 @@ module alu (
 
             OP_SBC: begin
                 if (decimal) begin
-                    out      = ds_diff[7:0];
-                    cout     = diff_bin[8];
+                    out      = {sbc_ah_dec, sbc_al_dec};
+                    cout     = diff_bin[8]; // NMOS: Flags remain purely binary
                     overflow = sbc_v;
                     negative = diff_bin[7];
                     zero     = (diff_bin[7:0] == 8'h00);
